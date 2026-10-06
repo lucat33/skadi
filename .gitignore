@@ -1,0 +1,14 @@
+# Ambiente virtuale Python (ognuno lo ricrea sul suo PC)
+.venv/
+
+# Dataset (centinaia di GB, troppo per GitHub)
+data/
+
+# Pesi del modello salvati durante il training
+checkpoints/
+
+# File temporanei che Python crea da solo
+__pycache__/
+
+# File temporanei che Jupyter crea da solo (useremo i notebook dalla Fase 1)
+.ipynb_checkpoints/
