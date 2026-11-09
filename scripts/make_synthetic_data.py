@@ -36,9 +36,8 @@ def make_scene(rng, lines, samples):
     sod[:, :8] = 255
     ia = np.broadcast_to(np.linspace(-1.5, 1.5, samples, dtype=np.float32)[None, :], (lines, samples))
     lat0, lon0 = rng.uniform(62, 82), rng.uniform(-80, 20)
-    gl, gs = 21, 6
-    lat = lat0 + np.linspace(0, 3, gl)[None, :] + np.zeros((gs, 1))
-    lon = lon0 + np.linspace(0, 8, gs)[:, None] + np.zeros((1, gl))
+    lat = lat0 + np.linspace(0, 3, 6)[:, None] + np.zeros((1, 21))  # tie points, laid out like the image
+    lon = lon0 + np.linspace(0, 8, 21)[None, :] + np.zeros((6, 1))
     return hh, hv, sod, ia.copy(), lat, lon
 
 

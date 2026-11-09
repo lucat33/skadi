@@ -84,12 +84,10 @@ def read_incidence_angle(ds, shape):
 
 def read_latlon(ds):
     if "sar_grid2d_latitude" in ds and "sar_grid2d_longitude" in ds:
+        # Tie-point grid. Despite the dimension names (sample points first), the array is
+        # laid out like the image, lines first: a 1200x5185 scene comes with a 6x21 grid.
         lat = np.asarray(ds["sar_grid2d_latitude"].values, dtype=np.float32)
         lon = np.asarray(ds["sar_grid2d_longitude"].values, dtype=np.float32)
-        dims = ds["sar_grid2d_latitude"].dims
-        # the tie-point grid is stored (samples, lines) in most files: make it (lines, samples)
-        if len(dims) == 2 and "sample" in dims[0] and "line" in dims[1]:
-            lat, lon = lat.T, lon.T
         return lat, lon
     return None, None
 
@@ -117,7 +115,7 @@ def process_scene(path: Path, dst: Path, size: int = SIZE) -> dict:
         "month": np.int8(month_from_name(path.name)),
     }
     if sod is not None:
-        sod = sod.astype(np.uint8)
+        sod = np.nan_to_num(sod, nan=IGNORE).astype(np.uint8)  # in case a fill value was decoded
         data["sod"] = resize_nearest(sod, size)
     if ia is not None:
         data["ia"] = resize_area(ia, size)[0].astype(np.float16)

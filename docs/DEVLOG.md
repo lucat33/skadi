@@ -40,6 +40,9 @@ needed care:
 * Labels are resized with nearest neighbour to keep them exactly as charted.
 * The test scenes keep their charts in separate `*_reference.nc` files; the loader
   looks for them, and `scripts/download_data.py test` fetches the test article.
+* The latitude/longitude tie-point grid has dimension names that suggest (samples,
+  lines), but the array is laid out like the image: the 1200x5185 scene opened in the
+  exploration notebook comes with a 6x21 grid. It is used as stored, without transposing.
 * Longitude is stored as sine and cosine because scenes near the date line would
   otherwise be interpolated across the ±180° jump.
 
