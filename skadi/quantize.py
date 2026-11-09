@@ -108,8 +108,8 @@ def main(argv=None):
         qat.train()
         if epoch > max(1, int(0.5 * args.epochs)):  # second half: frozen BatchNorm statistics
             qat.apply(torch.ao.nn.intrinsic.qat.freeze_bn_stats)
-        if epoch > max(1, int(0.75 * args.epochs)):  # last quarter: frozen quantisation ranges
-            qat.apply(torch.ao.quantization.disable_observer)
+        observing = epoch <= max(1, int(0.75 * args.epochs))  # last quarter: frozen quantisation ranges
+        qat.apply(torch.ao.quantization.enable_observer if observing else torch.ao.quantization.disable_observer)
         run_loss = 0.0
         for _ in range(args.iters):
             idx = torch.from_numpy(rng.choice(train_idx, args.batch, replace=len(train_idx) < args.batch))
@@ -121,6 +121,7 @@ def main(argv=None):
             optim.step()
             sched.step()
             run_loss += loss.item()
+        qat.apply(torch.ao.quantization.disable_observer)  # validation must not move the ranges
         m = evaluate(qat, val, mode, device)  # fake-quantised forward pass
         history.append({"epoch": epoch, "loss": run_loss / args.iters, "val_f1": m["f1_weighted"]})
         flag = ""

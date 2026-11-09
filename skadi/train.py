@@ -33,7 +33,7 @@ def get_args(argv=None):
     ap.add_argument("--epochs", type=int, default=150)
     ap.add_argument("--iters", type=int, default=200, help="iterations per epoch")
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--warmup", type=float, default=0.03, help="fraction of the run used for warm-up")
     ap.add_argument("--dice-weight", type=float, default=0.5)
@@ -66,9 +66,10 @@ def main(argv=None):
         torch.backends.cudnn.benchmark = True
 
     scenes = load_cache(args.train_cache)
-    train_idx, val_idx = split_train_val(len(scenes), args.val_scenes, seed=0)  # split never changes
+    n_val = min(args.val_scenes, len(scenes) // 4)  # small debug sets keep most scenes for training
+    train_idx, val_idx = split_train_val(len(scenes), n_val, seed=0)  # split never changes
     val = scenes.subset(val_idx)
-    train_idx = np.array(train_idx)
+    train_idx = np.array(train_idx, dtype=np.int64)
     counts = class_pixel_counts(scenes.sod[torch.as_tensor(train_idx)])
     weights = class_weights(counts, args.weight_power, args.myi_boost)
     print("train scenes:", len(train_idx), "| val scenes:", len(val))
