@@ -12,3 +12,7 @@ __pycache__/
 
 # File temporanei che Jupyter crea da solo (useremo i notebook dalla Fase 1)
 .ipynb_checkpoints/
+# Prodotti di inferenza e dati sintetici di prova
+products/
+data_synth/
+.pytest_cache/

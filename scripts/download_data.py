@@ -1,11 +1,17 @@
-"""Download the AI4Arctic ready-to-train dataset from DTU Data (figshare)."""
+"""Download the AI4Arctic ready-to-train dataset from DTU Data (figshare).
+
+    python scripts/download_data.py            # 513 training scenes  -> data/       (60 GB)
+    python scripts/download_data.py test       # 20 test scenes + reference charts -> data/test/ (2.6 GB)
+"""
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
 
-ARTICLE_ID = 21316608
-DATA_DIR = Path("data")
+# figshare article and destination folder of each split
+SPLITS = {"train": (21316608, Path("data")), "test": (21762830, Path("data/test"))}
+ARTICLE_ID, DATA_DIR = SPLITS[sys.argv[1] if len(sys.argv) > 1 else "train"]
 N_WORKERS = 4  # parallel downloads: figshare limits the speed of each single connection
 
 
@@ -33,7 +39,7 @@ def download(file_info):
 
 
 def main():
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     files = list_files()
     todo = [f for f in files if not is_complete(f)]
     todo_gb = sum(f["size"] for f in todo) / 1024**3

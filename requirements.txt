@@ -1,0 +1,13 @@
+# PyTorch: install the build that matches your GPU first, see https://pytorch.org/get-started/locally/
+torch>=2.3
+torchvision>=0.18
+numpy
+xarray
+h5netcdf
+h5py
+scipy
+matplotlib
+opencv-python-headless
+requests
+pytest
+scikit-learn
