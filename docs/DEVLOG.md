@@ -95,13 +95,59 @@ Problems found this way:
 * **Learning rate.** The first default (2e-3) gave an unstable validation curve on the
   synthetic runs; the default is now 1e-3. This will need confirming on real data.
 
-## 6. Quantisation and product generation
+## 6. A comparison on synthetic scenes that changed the model
 
-`skadi/quantize.py` compares FP32, post-training quantisation and QAT with 8-bit
-weights and activations, and exports the INT8 model (1.27 MB). `skadi/infer.py` turns
-a scene into OW/FYI/MYI polygons with confidence and an out-of-distribution score.
+To see whether both architectures train sensibly with the same recipe, each was
+trained for 600 iterations (batch 4) on 34 synthetic scenes, validated on 6 and tested
+on 6 more. These scores say nothing about real ice — the synthetic classes are just
+different mean backscatter values with noise — but the comparison exposed a real flaw.
 
-## 7. What is still open
+| Run | Test F1 on the synthetic scenes |
+|---|---:|
+| TinyIceNet re-implementation | 87.0 |
+| Skadi U-Net, first conv = mean of the RGB filters | 65.0 |
+| Skadi U-Net, first conv = R filters for HH, G filters for HV | 97.2 |
+
+The first Skadi U-Net was clearly behind the much smaller baseline. The cause was the
+way the ImageNet stem had been adapted to two channels: averaging the RGB filters gives
+HH and HV *identical* filters, so at the start the network only sees HH + HV, and the
+colour-opponent filters, which are the ones that respond to a difference between
+channels, average out to almost nothing. Assigning the filters of different colours to
+the two polarisations keeps that diversity. Nothing else was changed between the
+second and the third row.
+
+Two related changes to the training loop:
+
+* the EMA now averages the BatchNorm statistics together with the weights instead of
+  copying them from the live model;
+* every epoch both the live weights and the EMA weights are validated and the better
+  set is saved, because the average lags behind during the first epochs.
+
+A lesson on procedure: two training processes started side by side on the 4-core
+machine ran about twenty times slower than one (each wants all cores). One at a time.
+
+## 7. Quantisation and product generation
+
+`skadi/quantize.py` compares FP32, post-training quantisation and QAT, and exports the
+INT8 model (1.27 MB). `skadi/infer.py` turns a scene into OW/FYI/MYI polygons with
+confidence and an out-of-distribution score.
+
+The first QAT runs on the synthetic model were disappointing: 97.2 % in FP32 became
+73.0 % after conversion. Splitting the problem showed that
+
+* the converted integer model and the fake-quantised one agreed, so the conversion was
+  not at fault;
+* with float weights and quantised activations the loss was almost the same, so the
+  activations were the issue, not the weights;
+* PyTorch's default x86 configuration gives activations 7 bits (`reduce_range`), not 8.
+  With real 8-bit activations and no retraining at all the score went from 76 to 90.
+
+The script now uses an explicit 8-bit configuration and starts QAT from a calibration
+pass (without it the first epoch began at 48 % validation F1, with it at 86 %). After
+160 QAT iterations the synthetic model reaches 91.1 % on the test scenes and the
+converted model matches the simulated one on validation (96.81 vs 96.84).
+
+## 8. What is still open
 
 * **The training on AI4Arctic has not been run.** `python scripts/run_experiments.py`
   does it and writes `docs/RESULTS.md`. Until then there is no evidence that the model

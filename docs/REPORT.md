@@ -116,8 +116,10 @@ uscita 6×512×512 → probabilità OW / FYI / MYI per somma
 scarta la conv 96→576, pensata per la classificazione). Le convoluzioni depthwise
 separabili sono ciò che tiene basso il numero di operazioni. I pesi iniziali sono quelli
 di ImageNet; la prima convoluzione, nata per tre canali RGB, viene adattata a due canali
-mediando i filtri sui tre colori e riscalando per 3/2, così l'ampiezza delle attivazioni
-resta la stessa.
+dando a HH i filtri del rosso e a HV quelli del verde, riscalati per 3/2 perché l'ampiezza
+delle attivazioni resti la stessa. La prima versione mediava invece i filtri sui tre
+colori: in quel modo HH e HV ricevevano filtri identici e i filtri a opponenza cromatica,
+cioè proprio quelli sensibili a un contrasto fra canali, si annullavano (Sezione 6).
 
 *Decoder.* Quattro stadi U-Net. Ogni stadio raddoppia la risoluzione con interpolazione
 bilineare, concatena la mappa dell'encoder alla stessa scala e applica due convoluzioni
@@ -200,22 +202,26 @@ sono ricampionate con il vicino più prossimo e le zone che escono dalla scena d
 | Budget | 150 epoche × 200 iterazioni, batch 16 (480 mila scene viste) |
 | Precisione | mista (AMP) su GPU |
 | Regolarizzazione | dropout 0,1 sulla testa, clipping del gradiente a 5 |
-| Pesi valutati | media mobile esponenziale (EMA, 0,999) |
-| Selezione | epoca con il miglior F1 di validazione |
+| Pesi valutati | a ogni epoca sia i pesi correnti sia la loro media mobile esponenziale (EMA, 0,999) |
+| Selezione | epoca e insieme di pesi con il miglior F1 di validazione |
 
 ### 4.5 Quantizzazione a 8 bit
 
-`skadi/quantize.py` usa la quantizzazione FX di PyTorch con pesi **e attivazioni** a 8 bit
-(pesi simmetrici per canale, attivazioni affini). Produce tre modelli e li valuta sulle
-stesse scene:
+`skadi/quantize.py` usa la quantizzazione FX di PyTorch con pesi **e attivazioni** a 8 bit:
+pesi simmetrici per canale in [−128, 127], attivazioni affini in [0, 255]. La
+configurazione predefinita di PyTorch per x86 riserva alle attivazioni solo 7 bit, un
+accorgimento per vecchie CPU che a un datapath FPGA non serve: qui è sostituita da una
+configurazione esplicita a 8 bit (Sezione 6). Lo script produce tre modelli e li valuta
+sulle stesse scene:
 
 1. **FP32**, il modello di partenza;
 2. **PTQ**: si osservano le attivazioni su 64 scene di addestramento e si converte, senza
    riaddestrare;
-3. **QAT**: 15 epoche di fine-tuning con la quantizzazione simulata nel grafo (lr 2·10⁻⁴);
-   a metà si congelano le statistiche di BatchNorm e nell'ultimo quarto gli intervalli di
-   quantizzazione; si tiene l'epoca migliore in validazione e la si converte in un vero
-   modello intero, valutato su CPU ed esportato in TorchScript.
+3. **QAT**: dopo una passata di calibrazione, 15 epoche di fine-tuning con la
+   quantizzazione simulata nel grafo (lr 2·10⁻⁴); a metà si congelano le statistiche di
+   BatchNorm e nell'ultimo quarto gli intervalli di quantizzazione; durante la validazione
+   gli intervalli non vengono aggiornati; si tiene l'epoca migliore in validazione e la si
+   converte in un vero modello intero, valutato su CPU ed esportato in TorchScript.
 
 Rispetto a TinyIceNet, che quantizza i pesi, la nostra impostazione è più severa perché
 quantizza anche le attivazioni.
@@ -300,8 +306,42 @@ Ciò che è stato misurato finora non dipende dai dati reali:
 
 **Verifica del codice.** L'intera catena (cache, addestramento, valutazione, PTQ, QAT,
 inferenza, generazione del report) è stata eseguita su scene sintetiche con lo stesso
-formato dei file reali. Queste scene hanno statistiche inventate: i numeri ottenuti su di
-esse non dicono nulla sul ghiaccio reale e non sono riportati.
+formato dei file reali. Queste scene hanno statistiche inventate (ogni classe è un valore
+medio di retrodiffusione più rumore): i punteggi ottenuti su di esse **non dicono nulla
+sul ghiaccio reale** e non vanno letti come risultati.
+
+**Un'osservazione utile dalle scene sintetiche.** Addestrando le due architetture con la
+stessa procedura e lo stesso budget ridotto (600 iterazioni, batch 4, 34 scene sintetiche
+di addestramento, 6 di test) si è ottenuto:
+
+| Modello | F1 sul test sintetico |
+|---|---:|
+| TinyIceNet reimplementata | 87,0 |
+| Skadi U-Net, prima conv = media dei filtri RGB | 65,0 |
+| Skadi U-Net, prima conv = filtri R per HH e G per HV | 97,2 |
+
+La prima versione della nostra rete era nettamente dietro la baseline. La causa era
+l'adattamento della prima convoluzione di ImageNet: con la media dei filtri RGB, HH e HV
+partono con filtri identici e la rete vede inizialmente solo la somma dei due canali,
+mentre l'informazione che distingue i tipi di ghiaccio sta nel loro rapporto. Fra la
+seconda e la terza riga è cambiata solo questa inizializzazione. Il confronto vale come
+prova che la procedura di addestramento funziona per entrambe le reti e come
+giustificazione di una scelta di progetto, non come anticipazione del risultato sui dati
+reali.
+
+Sullo stesso modello sintetico (97,2 in FP32) la quantizzazione ha dato:
+
+| Configurazione INT8 | F1 sul test sintetico |
+|---|---:|
+| PTQ, attivazioni a 8 bit | 82,3 |
+| QAT con la configurazione predefinita di PyTorch (attivazioni a 7 bit), 80 iterazioni | 73,0 |
+| QAT con attivazioni a 8 bit e calibrazione iniziale, 160 iterazioni | 91,1 |
+
+MobileNetV3 è sensibile alla quantizzazione delle attivazioni (blocchi squeeze-excite,
+Hardswish, convoluzioni depthwise): il bit in più e il riaddestramento contano. Il modello
+intero convertito e quello simulato durante il QAT coincidono in validazione (96,81 contro
+96,84), quindi la conversione è fedele. Sui dati reali il QAT dispone di 3000 iterazioni;
+resta da misurare quanto dell'accuratezza FP32 venga recuperato.
 
 ## 7. Discussione e limiti
 
