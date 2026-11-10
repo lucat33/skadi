@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.ao.quantization as tq
 from torch.ao.quantization import get_default_qat_qconfig_mapping, get_default_qconfig_mapping
 from torch.ao.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 
@@ -36,6 +37,29 @@ warnings.filterwarnings("ignore", message=".*torch.ao.quantization is deprecated
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.ao")
 
 BACKEND = "x86" if "x86" in torch.backends.quantized.supported_engines else "fbgemm"
+
+
+def qconfig_mapping(qat: bool):
+    """8-bit activations (0..255, affine) and 8-bit per-channel symmetric weights.
+
+    PyTorch's default x86 configuration keeps only 7 bits for the activations
+    (`reduce_range`), a workaround for older CPUs that an FPGA datapath does not need
+    and that costs a lot of accuracy on MobileNetV3. We start from the default mapping,
+    which carries the fixed ranges of hard-sigmoid and similar operators, and replace
+    the general rule.
+    """
+    if qat:
+        mapping = get_default_qat_qconfig_mapping(BACKEND)
+        act = tq.FakeQuantize.with_args(observer=tq.MovingAverageMinMaxObserver, quant_min=0, quant_max=255,
+                                        dtype=torch.quint8, qscheme=torch.per_tensor_affine)
+        weight = tq.FakeQuantize.with_args(observer=tq.MovingAveragePerChannelMinMaxObserver,
+                                           quant_min=-128, quant_max=127, dtype=torch.qint8,
+                                           qscheme=torch.per_channel_symmetric, ch_axis=0)
+    else:
+        mapping = get_default_qconfig_mapping(BACKEND)
+        act = tq.HistogramObserver.with_args(reduce_range=False)
+        weight = tq.PerChannelMinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_channel_symmetric)
+    return mapping.set_global(tq.QConfig(activation=act, weight=weight))
 
 
 def state_size_mb(model: torch.nn.Module) -> float:
@@ -86,7 +110,7 @@ def main(argv=None):
     print(f"FP32      test F1 {report['fp32']['f1_weighted']:.3f} | {report['fp32']['size_mb']:.2f} MB")
 
     # ---- post-training quantisation: observe activations on training scenes, then convert
-    ptq = prepare_fx(copy.deepcopy(fp32).eval(), get_default_qconfig_mapping(BACKEND), example)
+    ptq = prepare_fx(copy.deepcopy(fp32).eval(), qconfig_mapping(qat=False), example)
     calib = rng.choice(train_idx, min(args.calib_scenes, len(train_idx)), replace=False)
     with torch.no_grad():
         for start in range(0, len(calib), 8):
@@ -96,7 +120,11 @@ def main(argv=None):
     print(f"PTQ INT8  test F1 {report['ptq_int8']['f1_weighted']:.3f} | {report['ptq_int8']['size_mb']:.2f} MB")
 
     # ---- quantisation-aware training
-    qat = prepare_qat_fx(copy.deepcopy(fp32).train(), get_default_qat_qconfig_mapping(BACKEND), example)
+    qat = prepare_qat_fx(copy.deepcopy(fp32).train(), qconfig_mapping(qat=True), example)
+    qat.eval()  # start the activation ranges from a calibration pass instead of from scratch
+    with torch.no_grad():
+        for start in range(0, len(calib), 8):
+            qat(scenes.inputs(torch.from_numpy(calib[start:start + 8]), mode, "cpu"))
     qat.to(device)
     augment = Augment()
     criterion = CEDiceLoss(torch.tensor(ckpt["class_weights"]), ckpt["args"]["dice_weight"]).to(device)
@@ -133,7 +161,8 @@ def main(argv=None):
     qat.load_state_dict(best_state)
     int8 = convert_fx(qat.to("cpu").eval())
     full = evaluate(int8, test, mode, "cpu", per_scene=True)
-    report["qat_int8"] = {**summary(full), "size_mb": state_size_mb(int8), "val_f1": best,
+    report["qat_int8"] = {**summary(full), "size_mb": state_size_mb(int8), "val_f1_fake_quant": best,
+                          "val_f1": evaluate(int8, val, mode, "cpu")["f1_weighted"],
                           "per_scene_f1": full["per_scene_f1"], "confusion": full["confusion"]}
     report["qat_history"] = history
     print(f"QAT INT8  test F1 {report['qat_int8']['f1_weighted']:.3f} | {report['qat_int8']['size_mb']:.2f} MB")
