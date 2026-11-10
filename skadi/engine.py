@@ -20,7 +20,7 @@ def pick_device(name: str = "auto") -> torch.device:
 
 
 class EMA:
-    """Exponential moving average of the weights (BatchNorm statistics are copied)."""
+    """Exponential moving average of the weights and of the BatchNorm statistics."""
 
     def __init__(self, model: nn.Module, decay: float = 0.999):
         self.model = copy.deepcopy(model).eval()
@@ -36,7 +36,10 @@ class EMA:
         for e, p in zip(self.model.parameters(), model.parameters()):
             e.mul_(d).add_(p.detach(), alpha=1 - d)
         for e, b in zip(self.model.buffers(), model.buffers()):
-            e.copy_(b)
+            if e.dtype.is_floating_point:  # running mean / variance follow the same average
+                e.mul_(d).add_(b.detach(), alpha=1 - d)
+            else:
+                e.copy_(b)
 
 
 @torch.no_grad()

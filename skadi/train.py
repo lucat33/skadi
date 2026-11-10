@@ -128,22 +128,29 @@ def main(argv=None):
             ema.update(model)
             run_loss += loss.item()
 
+        # The averaged weights are normally the better ones, but they lag behind early in
+        # training: validate both sets and keep whichever is ahead.
         with torch.autocast(device.type, enabled=use_amp):
-            m = evaluate(ema.model, val, args.inputs, device)
+            m_ema = evaluate(ema.model, val, args.inputs, device)
+            m_live = evaluate(model, val, args.inputs, device)
+        use_ema = m_ema["f1_weighted"] >= m_live["f1_weighted"]
+        m, chosen = (m_ema, ema.model) if use_ema else (m_live, model)
         rec = {"epoch": epoch, "loss": run_loss / args.iters, "lr": sched.get_last_lr()[0],
-               "val_f1": m["f1_weighted"], "val_f1_macro": m["f1_macro"],
+               "val_f1": m["f1_weighted"], "val_f1_ema": m_ema["f1_weighted"],
+               "val_f1_live": m_live["f1_weighted"], "val_f1_macro": m["f1_macro"],
                "val_f1_skadi3": m["skadi3"]["f1_weighted"], "minutes": (time.time() - t0) / 60}
         log.write(json.dumps(rec) + "\n")
         log.flush()
         flag = ""
         if m["f1_weighted"] > best:
             best = m["f1_weighted"]
-            save_checkpoint(ckpt_dir / "best.pt", ema.model, {**meta, "epoch": epoch, "val": m})
+            save_checkpoint(ckpt_dir / "best.pt", chosen,
+                            {**meta, "epoch": epoch, "val": m, "weights": "ema" if use_ema else "live"})
             flag = " *"
-        print(f"epoch {epoch:3d}/{args.epochs} loss {rec['loss']:.4f} | val F1 {m['f1_weighted']:.2f} "
-              f"(macro {m['f1_macro']:.2f}, 3-class {m['skadi3']['f1_weighted']:.2f}) "
-              f"| {rec['minutes']:.1f} min{flag}", flush=True)
-    save_checkpoint(ckpt_dir / "last.pt", ema.model, {**meta, "epoch": args.epochs, "val": m})
+        print(f"epoch {epoch:3d}/{args.epochs} loss {rec['loss']:.4f} | val F1 ema {m_ema['f1_weighted']:.2f} "
+              f"live {m_live['f1_weighted']:.2f} (macro {m['f1_macro']:.2f}, "
+              f"3-class {m['skadi3']['f1_weighted']:.2f}) | {rec['minutes']:.1f} min{flag}", flush=True)
+    save_checkpoint(ckpt_dir / "last.pt", ema.model, {**meta, "epoch": args.epochs, "val": m_ema})
     print(f"best validation F1: {best:.3f} -> {ckpt_dir / 'best.pt'}")
 
 

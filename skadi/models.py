@@ -45,8 +45,11 @@ def _adapt_first_conv(conv: nn.Conv2d, in_ch: int) -> nn.Conv2d:
     """Re-use ImageNet filters for a different number of input channels."""
     new = nn.Conv2d(in_ch, conv.out_channels, conv.kernel_size, conv.stride, conv.padding, bias=False)
     with torch.no_grad():
-        mean = conv.weight.mean(dim=1, keepdim=True)  # average over R, G, B
-        new.weight.copy_(mean.repeat(1, in_ch, 1, 1) * (3.0 / in_ch))
+        # Give every input channel the filters of a different colour (R, G, B, R, ...).
+        # Averaging the three colours instead would hand HH and HV identical filters and
+        # cancel the colour-opponent ones, i.e. exactly the detectors of an HH/HV contrast.
+        idx = torch.arange(in_ch) % 3
+        new.weight.copy_(conv.weight[:, idx] * (3.0 / in_ch))
     return new
 
 
